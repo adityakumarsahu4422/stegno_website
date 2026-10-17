@@ -1,0 +1,428 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StegoLab</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #0b1020;
+  color: #e8edff;
+  font-family: system-ui, sans-serif;
+}
+
+.app {
+  max-width: 520px;
+  margin: auto;
+}
+
+h1 {
+  text-align: center;
+  color: #70f0d0;
+  margin-bottom: 5px;
+}
+
+.subtitle {
+  text-align: center;
+  color: #9aa8c9;
+  margin-bottom: 24px;
+}
+
+.card {
+  background: #151d33;
+  border: 1px solid #293653;
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 17px;
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  margin: 12px 0 7px;
+  color: #b8c7e9;
+}
+
+input, textarea, button {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  font: inherit;
+}
+
+input, textarea {
+  background: #0b1020;
+  border: 1px solid #344362;
+  color: white;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 95px;
+}
+
+button {
+  border: 0;
+  background: #70f0d0;
+  color: #071520;
+  font-weight: 700;
+  margin-top: 12px;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #344362;
+  color: white;
+}
+
+button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.preview {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  margin: 12px auto 0;
+  border-radius: 10px;
+}
+
+.status {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #70f0d0;
+  font-size: 14px;
+  margin-top: 12px;
+}
+
+.small {
+  color: #9aa8c9;
+  font-size: 13px;
+  line-height: 1.5;
+}
+</style>
+</head>
+
+<body>
+<div class="app">
+  <h1>🔐 StegoLab</h1>
+  <p class="subtitle">Hide a message inside a PNG image</p>
+
+  <section class="card">
+    <h2>1. Select an image</h2>
+    <label for="imageFile">Choose a PNG or JPG image</label>
+    <input id="imageFile" type="file"
+           accept="image/png,image/jpeg">
+
+    <img id="preview" class="preview"
+         alt="Image preview" hidden>
+
+    <p id="imageInfo" class="small">
+      Choose an image to begin.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>2. Hide a message</h2>
+    <label for="message">Your test message</label>
+    <textarea id="message"
+      placeholder="Type a message to hide..."></textarea>
+
+    <button id="hideBtn" disabled>
+      Hide Message in Image
+    </button>
+
+    <button id="downloadBtn" class="secondary" hidden>
+      Download PNG
+    </button>
+
+    <p id="hideStatus" class="status" role="status"></p>
+  </section>
+
+  <section class="card">
+    <h2>3. Extract a message</h2>
+    <p class="small">
+      Select the original image or a previously encoded PNG.
+      Extraction works only with images made using this app's format.
+    </p>
+
+    <button id="extractBtn" class="secondary" disabled>
+      Extract Hidden Message
+    </button>
+
+    <label for="result">Extracted text</label>
+    <textarea id="result" readonly
+      placeholder="Your extracted message appears here..."></textarea>
+
+    <button id="copyBtn" class="secondary">
+      Copy Extracted Text
+    </button>
+
+    <p id="extractStatus" class="status" role="status"></p>
+  </section>
+
+  <p class="small">
+    Educational demo: this hides data but does not encrypt it.
+    Use PNG for the saved result. Avoid sensitive information.
+  </p>
+</div>
+
+<canvas id="canvas" hidden></canvas>
+
+<script>
+const fileInput = document.getElementById("imageFile");
+const preview = document.getElementById("preview");
+const imageInfo = document.getElementById("imageInfo");
+const message = document.getElementById("message");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", {
+  willReadFrequently: true
+});
+
+const hideBtn = document.getElementById("hideBtn");
+const downloadBtn = document.getElementById("downloadBtn");
+const extractBtn = document.getElementById("extractBtn");
+const result = document.getElementById("result");
+
+let originalImage = null;
+let currentFile = null;
+let outputURL = null;
+
+function status(id, text) {
+  document.getElementById(id).textContent = text;
+}
+
+function loadToCanvas(img) {
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  ctx.drawImage(img, 0, 0);
+
+  return ctx.getImageData(
+    0, 0, canvas.width, canvas.height
+  );
+}
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  if (!["image/png", "image/jpeg"].includes(file.type)) {
+    status("hideStatus", "Choose a PNG or JPG image.");
+    return;
+  }
+
+  if (file.size > 15 * 1024 * 1024) {
+    status("hideStatus", "Choose an image smaller than 15 MB.");
+    return;
+  }
+
+  if (outputURL) URL.revokeObjectURL(outputURL);
+  outputURL = null;
+  downloadBtn.hidden = true;
+  result.value = "";
+
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+
+  img.onload = () => {
+    originalImage = img;
+    currentFile = file;
+    preview.src = url;
+    preview.hidden = false;
+
+    const pixels = img.naturalWidth * img.naturalHeight;
+    const maxBytes = Math.max(0,
+      Math.floor((pixels * 3 - 32) / 8));
+
+    imageInfo.textContent =
+      `${img.naturalWidth} × ${img.naturalHeight} pixels\n` +
+      `Approximate message capacity: ${maxBytes} bytes`;
+
+    hideBtn.disabled = false;
+    extractBtn.disabled = false;
+
+    status("hideStatus", "");
+    status("extractStatus", "");
+  };
+
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    status("hideStatus", "Could not load this image.");
+  };
+
+  img.src = url;
+});
+
+function setBit(data, pixelChannelIndex, bit) {
+  data[pixelChannelIndex] =
+    (data[pixelChannelIndex] & 254) | bit;
+}
+
+function getBit(data, pixelChannelIndex) {
+  return data[pixelChannelIndex] & 1;
+}
+
+hideBtn.addEventListener("click", () => {
+  if (!originalImage) return;
+
+  try {
+    const bytes = new TextEncoder().encode(message.value);
+
+    const imageData = loadToCanvas(originalImage);
+    const data = imageData.data;
+
+    // Header: 32-bit message length, in bytes.
+    const bits = [];
+
+    for (let i = 31; i >= 0; i--) {
+      bits.push((bytes.length >>> i) & 1);
+    }
+
+    for (const byte of bytes) {
+      for (let i = 7; i >= 0; i--) {
+        bits.push((byte >>> i) & 1);
+      }
+    }
+
+    // Store bits in RGB channels, skipping alpha.
+    const capacity = imageData.width *
+                     imageData.height * 3;
+
+    if (bits.length > capacity) {
+      status("hideStatus",
+        "Message too long for this image. Choose a larger image.");
+      return;
+    }
+
+    let bitIndex = 0;
+
+    for (let i = 0; i < data.length && bitIndex < bits.length; i++) {
+      if (i % 4 === 3) continue; // Keep alpha unchanged.
+
+      setBit(data, i, bits[bitIndex]);
+      bitIndex++;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    canvas.toBlob(blob => {
+      if (!blob) {
+        status("hideStatus", "PNG export failed.");
+        return;
+      }
+
+      if (outputURL) URL.revokeObjectURL(outputURL);
+      outputURL = URL.createObjectURL(blob);
+
+      downloadBtn.hidden = false;
+      status("hideStatus",
+        `Message hidden successfully!\n` +
+        `Message size: ${bytes.length} bytes.\n` +
+        `Download the PNG below.`);
+    }, "image/png");
+
+  } catch (error) {
+    status("hideStatus", "Error: " + error.message);
+  }
+});
+
+downloadBtn.addEventListener("click", () => {
+  if (!outputURL) return;
+
+  const link = document.createElement("a");
+  link.href = outputURL;
+  link.download = "hidden-message.png";
+  link.click();
+});
+
+extractBtn.addEventListener("click", () => {
+  if (!originalImage) return;
+
+  try {
+    const imageData = loadToCanvas(originalImage);
+    const data = imageData.data;
+    const totalChannels = imageData.width *
+                          imageData.height * 3;
+
+    if (totalChannels < 32) {
+      throw new Error("Image is too small.");
+    }
+
+    let channelIndex = 0;
+
+    function readBit() {
+      while (channelIndex < data.length) {
+        const index = channelIndex++;
+        if (index % 4 === 3) continue;
+        return getBit(data, index);
+      }
+      throw new Error("Not enough image data.");
+    }
+
+    let length = 0;
+
+    for (let i = 0; i < 32; i++) {
+      length = length * 2 + readBit();
+    }
+
+    const maxBytes = Math.floor((totalChannels - 32) / 8);
+
+    if (length > maxBytes) {
+      throw new Error(
+        "No valid message found, or image was modified."
+      );
+    }
+
+    const bytes = new Uint8Array(length);
+
+    for (let i = 0; i < length; i++) {
+      let byte = 0;
+      for (let b = 0; b < 8; b++) {
+        byte = byte * 2 + readBit();
+      }
+      bytes[i] = byte;
+    }
+
+    result.value = new TextDecoder("utf-8", {
+      fatal: true
+    }).decode(bytes);
+
+    status("extractStatus", "Extraction completed.");
+
+  } catch (error) {
+    result.value = "";
+    status("extractStatus",
+      "Could not extract a valid message. " + error.message);
+  }
+});
+
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  if (!result.value) {
+    status("extractStatus", "There is no text to copy.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(result.value);
+    status("extractStatus", "Text copied!");
+  } catch {
+    result.focus();
+    result.select();
+    status("extractStatus",
+      "Text selected. Use Copy from the keyboard menu.");
+  }
+});
+</script>
+</body>
+</html>
